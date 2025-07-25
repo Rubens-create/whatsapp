@@ -61,36 +61,43 @@ async function startBot() {
       }
     });
 
-    // =================================================================
-    // WEBHOOK PARA O N8N (VERSÃO MINIMALISTA - INCOMING & OUTGOING)
-    // =================================================================
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-      const msg = messages[0];
-      
-      // Ignora apenas atualizações de status, que não têm conteúdo de mensagem.
-      // A verificação 'fromMe' foi REMOVIDA daqui.
-      if (!msg.message) {
-        return;
-      }
-    
-      // Se a URL do webhook não estiver configurada, não faz nada.
-      if (!N8N_WEBHOOK_URL) {
-        console.log('AVISO: N8N_WEBHOOK_URL não configurada. Webhook ignorado.');
-        return;
-      }
-      
-      try {
-        const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
-        console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
+      // =================================================================
+      // WEBHOOK PARA O N8N (VERSÃO FILTRADA E CORRETA)
+      // =================================================================
+      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        // Verificamos o 'type' do evento. 'notify' é para novas mensagens.
+        // 'append' pode ser para mensagens antigas sendo carregadas.
+        if (type !== 'notify') {
+          return;
+        }
         
-        // Envia o objeto da mensagem original, sem modificações.
-        await axios.post(N8N_WEBHOOK_URL, msg);
-    
-      } catch (error) {
-        const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
-        console.error(`❌ Erro ao enviar webhook [${direction}] para o n8n:`, error.message);
-      }
-    });
+        const msg = messages[0];
+        
+        // O FILTRO DEFINITIVO:
+        // 1. !msg.message: Ignora eventos que não são mensagens (como atualizações de status de entrega/leitura).
+        // 2. msg.key.remoteJid === 'status@broadcast': Ignora atualizações de Status do WhatsApp.
+        if (!msg.message || msg.key.remoteJid === 'status@broadcast') {
+          return;
+        }
+      
+        // Se a URL do webhook não estiver configurada, não faz nada.
+        if (!N8N_WEBHOOK_URL) {
+          return; // Não precisa de log aqui, para não poluir
+        }
+        
+        try {
+          const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
+          // Log apenas para mensagens reais, não para status.
+          console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
+          
+          // Envia o objeto da mensagem original, sem modificações.
+          await axios.post(N8N_WEBHOOK_URL, msg);
+      
+        } catch (error) {
+          const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
+          console.error(`❌ Erro ao enviar webhook [${direction}] para o n8n:`, error.message);
+        }
+      });
 
     return sock;
   }
