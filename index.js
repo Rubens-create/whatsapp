@@ -143,6 +143,21 @@ async function createApi() {
       }
     });
 
+    app.post('/get-profile-pic', async (req, res) => {
+      const { to } = req.body;
+      if (!to) return res.status(400).json({ success: false, error: 'Parâmetro "to" é obrigatório.' });
+    
+      try {
+        const jid = formatJid(to);
+        // O parâmetro 'image' pega a foto em alta resolução. 'preview' pega a miniatura.
+        const ppUrl = await sock.profilePictureUrl(jid, 'image');
+        res.json({ success: true, url: ppUrl });
+      } catch (e) {
+        // Ocorre um erro se o usuário não tiver foto ou se for privada
+        res.status(404).json({ success: false, error: 'Foto de perfil não encontrada ou é privada.' });
+      }
+    });
+
     app.post('/send-presence', async (req, res) => {
       const { to, presence } = req.body;
       if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
