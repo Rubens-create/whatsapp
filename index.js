@@ -190,6 +190,36 @@ function createApi() {
   });
 }
 
+// NOVO ENDPOINT PARA REAGIR A UMA MENSAGEM
+app.post('/send-reaction', async (req, res) => {
+  // Para reagir, precisamos de 3 coisas:
+  // 1. O chat onde a mensagem está (to)
+  // 2. O emoji que queremos usar (reaction)
+  // 3. A chave da mensagem original que vamos reagir (messageKey)
+  const { to, reaction, messageKey } = req.body;
+
+  if (!to || !reaction || !messageKey || !messageKey.id) {
+    return res.status(400).json({ success: false, error: 'Parâmetros "to", "reaction" e "messageKey" (com ID) são obrigatórios.' });
+  }
+  if (!sockInstance) {
+    return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+  }
+
+  try {
+    // A função sendMessage também é usada para reagir.
+    // Passamos o texto da reação e a chave da mensagem a ser reagida.
+    await sockInstance.sendMessage(formatJid(to), {
+      react: {
+        text: reaction, // O emoji, ex: "👍"
+        key: messageKey, // O objeto 'key' da mensagem original
+      },
+    });
+    res.json({ success: true, message: `Reação '${reaction}' enviada.` });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // =================================================================
 // 5. INICIA TODO O SISTEMA
 // =================================================================
