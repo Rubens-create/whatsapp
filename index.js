@@ -62,23 +62,33 @@ async function startBot() {
     });
 
     // =================================================================
-    // WEBHOOK PARA O N8N
+    // WEBHOOK PARA O N8N (VERSÃO MINIMALISTA - INCOMING & OUTGOING)
     // =================================================================
     sock.ev.on('messages.upsert', async ({ messages }) => {
       const msg = messages[0];
-      if (!msg.message || msg.key.fromMe) {
+      
+      // Ignora apenas atualizações de status, que não têm conteúdo de mensagem.
+      // A verificação 'fromMe' foi REMOVIDA daqui.
+      if (!msg.message) {
         return;
       }
+    
+      // Se a URL do webhook não estiver configurada, não faz nada.
       if (!N8N_WEBHOOK_URL) {
-        console.log('AVISO: N8N_WEBHOOK_URL não configurada. Webhook para n8n ignorado.');
+        console.log('AVISO: N8N_WEBHOOK_URL não configurada. Webhook ignorado.');
         return;
       }
+      
       try {
-        // console.log(`Enviando mensagem para o n8n:`, JSON.stringify(msg, null, 2)); // Descomente para debug detalhado
+        const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
+        console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
+        
+        // Envia o objeto da mensagem original, sem modificações.
         await axios.post(N8N_WEBHOOK_URL, msg);
-        console.log(`✅ Webhook enviado para n8n. Remetente: ${msg.key.remoteJid}`);
+    
       } catch (error) {
-        console.error('❌ Erro ao enviar webhook para o n8n:', error.message);
+        const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
+        console.error(`❌ Erro ao enviar webhook [${direction}] para o n8n:`, error.message);
       }
     });
 
