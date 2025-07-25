@@ -149,16 +149,28 @@ async function createApi() {
       }
     });
 
-    app.post('/send-audio', async (req, res) => {
-      const { to, path } = req.body;
-      if (!to || !path) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "path" são obrigatórios.' });
+// ROTA ALTERNATIVA PARA ENVIO BINÁRIO (MAIS AVANÇADA)
+// Note o 'express.raw' no meio. Ele substitui o 'express.json' para esta rota.
+    app.post('/send-audio-binary', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+      // O 'to' não pode vir no corpo, pois o corpo é o áudio.
+      // Uma boa prática é enviá-lo como um query parameter na URL.
+      // Ex: /send-audio-binary?to=5511999998888
+      const { to } = req.query;
+    
+      if (!to) {
+        return res.status(400).json({ success: false, error: 'Parâmetro "to" na URL é obrigatório.' });
+      }
+    
       try {
-        if (!fs.existsSync(path)) throw new Error('Arquivo de áudio não encontrado no caminho especificado.');
-        const buffer = fs.readFileSync(path);
-        await sock.sendMessage(formatJid(to), { audio: buffer, ptt: true });
-        res.json({ success: true, message: 'Áudio enviado.' });
+        // O corpo da requisição (req.body) JÁ É o buffer do áudio!
+        const audioBuffer = req.body;
+        
+        await sock.sendMessage(formatJid(to), { audio: audioBuffer, ptt: true });
+        
+        res.json({ success: true, message: 'Áudio binário enviado.' });
       } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.error('Erro ao enviar áudio binário:', e);
+        res.status(500).json({ success: false, error: 'Falha ao processar ou enviar o áudio: ' + e.message });
       }
     });
 
