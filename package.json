@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": { "start": "node index.js" },
   "dependencies": {
-    "@whiskeysockets/baileys": "^5.0.0",
-    "pino": "^8.0.0"
-  }
+  "@whiskeysockets/baileys": "latest",
+  "axios": "^1.7.2",
+  "express": "^4.19.2",
+  "pino": "^8.21.0"
+}
 }
