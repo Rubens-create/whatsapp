@@ -62,35 +62,37 @@ async function startBot() {
     });
 
       // =================================================================
-      // WEBHOOK PARA O N8N (VERSÃO FILTRADA E CORRETA)
+      // WEBHOOK PARA O N8N (VERSÃO COM FILTRO DEFINITIVO)
       // =================================================================
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        // Verificamos o 'type' do evento. 'notify' é para novas mensagens.
-        // 'append' pode ser para mensagens antigas sendo carregadas.
+        // Mantemos a verificação de 'notify' para focar em eventos em tempo real.
         if (type !== 'notify') {
           return;
         }
         
         const msg = messages[0];
         
-        // O FILTRO DEFINITIVO:
-        // 1. !msg.message: Ignora eventos que não são mensagens (como atualizações de status de entrega/leitura).
-        // 2. msg.key.remoteJid === 'status@broadcast': Ignora atualizações de Status do WhatsApp.
-        if (!msg.message || msg.key.remoteJid === 'status@broadcast') {
+        // O FILTRO APRIMORADO E DEFINITIVO:
+        // 1. !msg.message: Ignora eventos sem um objeto de mensagem (como status de entrega/leitura).
+        // 2. msg.message.protocolMessage: Ignora mensagens de protocolo do WhatsApp (como a de sincronização de histórico).
+        // 3. msg.key.remoteJid === 'status@broadcast': Ignora atualizações de Status do WhatsApp.
+        if (
+          !msg.message ||
+          msg.message.protocolMessage || 
+          msg.key.remoteJid === 'status@broadcast'
+        ) {
           return;
         }
       
         // Se a URL do webhook não estiver configurada, não faz nada.
         if (!N8N_WEBHOOK_URL) {
-          return; // Não precisa de log aqui, para não poluir
+          return;
         }
         
         try {
           const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
-          // Log apenas para mensagens reais, não para status.
           console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
           
-          // Envia o objeto da mensagem original, sem modificações.
           await axios.post(N8N_WEBHOOK_URL, msg);
       
         } catch (error) {
@@ -172,6 +174,39 @@ async function createApi() {
       } catch (e) {
         // Ocorre um erro se o usuário não tiver foto ou se for privada
         res.status(404).json({ success: false, error: 'Foto de perfil não encontrada ou é privada.' });
+      }
+    });
+
+
+    // Rota para marcar o status de um usuário como visto
+    app.post('/view-status', async (req, res) => {
+      const { jid } = req.body; // Esperamos receber o JID completo do contato
+      
+      if (!jid) {
+        return res.status(400).json({ success: false, error: 'Parâmetro "jid" é obrigatório.' });
+      }
+      
+      if (!jid.endsWith('@s.whatsapp.net')) {
+         return res.status(400).json({ success: false, error: 'O "jid" deve ser o ID completo do usuário (ex: 5511999998888@s.whatsapp.net).' });
+      }
+    
+      try {
+        // Para marcar um status como visto, você precisa construir uma "key" especial.
+        // O participante é o JID do próprio bot, pois é ele quem "viu" o status.
+        const key = {
+          remoteJid: 'status@broadcast',
+          fromMe: false,
+          id: '', // O ID do status específico não é necessário para a notificação de visualização
+          participant: jid // O JID de quem postou o status
+        };
+    
+        // A função readMessages com a key correta notifica o WhatsApp que você viu o status.
+        await sock.readMessages([key]);
+        
+        res.json({ success: true, message: `Status de ${jid} marcado como visto.` });
+    
+      } catch (e) {
+        res.status(500).json({ success: false, error: 'Falha ao marcar status como visto: ' + e.message });
       }
     });
 
