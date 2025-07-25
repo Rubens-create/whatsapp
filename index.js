@@ -9,7 +9,7 @@ const Pino = require('pino');
 const fs = require('fs');
 
 async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth');
+  const { state, saveCreds } = await useMultiFileAuthState('/sessions');
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
