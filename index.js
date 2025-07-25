@@ -16,7 +16,7 @@ const qrcode = require('qrcode-terminal');
 
 // --- Variáveis de Ambiente ---
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
-const API_PORT = process.env.PORT || 3000;
+const API_PORT = process.env.PORT || 21465;
 const API_KEY = process.env.API_KEY;
 
 // =================================================================
