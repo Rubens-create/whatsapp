@@ -12,33 +12,40 @@ const Pino = require('pino');
 const fs = require('fs');
 const express = require('express');
 const axios = require('axios');
-const qrcode = require('qrcode-terminal'); // Importação da nova dependência
+const qrcode = require('qrcode-terminal');
 
-// --- Variáveis de Ambiente (MUITO IMPORTANTE para o Coolify) ---
+// --- Variáveis de Ambiente ---
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const API_PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;
 
 // =================================================================
-// 2. FUNÇÃO PRINCIPAL DO BOT (BAILEYS)
+// 2. ESCOPO COMPARTILHADO PARA O SOQUETE
+// =================================================================
+// MUDANÇA 1: Criamos uma variável "global" para guardar a instância do socket.
+// Isso permite que a função de reconexão atualize o socket e a API sempre
+// use a versão mais recente.
+let sockInstance = null;
+
+// =================================================================
+// 3. FUNÇÃO PRINCIPAL DO BOT (BAILEYS)
 // =================================================================
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('sessions');
   const { version } = await fetchLatestBaileysVersion();
-  let sock;
 
   function connectToWhatsApp() {
-    sock = makeWASocket({
+    // MUDANÇA 2: Atribuímos a nova conexão à variável compartilhada 'sockInstance'.
+    sockInstance = makeWASocket({
       version,
       browser: Browsers.ubuntu('n8n-Chatwoot-Bot'),
       auth: state,
-      logger: Pino({ level: 'silent' }), // Opção obsoleta 'printQRInTerminal' removida
+      logger: Pino({ level: 'silent' }),
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sockInstance.ev.on('creds.update', saveCreds);
 
-    // --- LÓGICA DE CONEXÃO E QR CODE ATUALIZADA ---
-    sock.ev.on('connection.update', (update) => {
+    sockInstance.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -52,7 +59,7 @@ async function startBot() {
         const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
         console.log('Conexão fechada, motivo:', lastDisconnect?.error, ', reconectando:', shouldReconnect);
         if (shouldReconnect) {
-          setTimeout(connectToWhatsApp, 5000);
+          setTimeout(connectToWhatsApp, 5000); // Tenta reconectar
         }
       } else if (connection === 'open') {
         console.log('================================================');
@@ -61,197 +68,135 @@ async function startBot() {
       }
     });
 
-      // =================================================================
-      // WEBHOOK PARA O N8N (VERSÃO COM FILTRO DEFINITIVO)
-      // =================================================================
-      sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        // Mantemos a verificação de 'notify' para focar em eventos em tempo real.
-        if (type !== 'notify') {
-          return;
-        }
-        
-        const msg = messages[0];
-        
-        // O FILTRO APRIMORADO E DEFINITIVO:
-        // 1. !msg.message: Ignora eventos sem um objeto de mensagem (como status de entrega/leitura).
-        // 2. msg.message.protocolMessage: Ignora mensagens de protocolo do WhatsApp (como a de sincronização de histórico).
-        // 3. msg.key.remoteJid === 'status@broadcast': Ignora atualizações de Status do WhatsApp.
-        if (
-          !msg.message ||
-          msg.message.protocolMessage || 
-          msg.key.remoteJid === 'status@broadcast'
-        ) {
-          return;
-        }
-      
-        // Se a URL do webhook não estiver configurada, não faz nada.
-        if (!N8N_WEBHOOK_URL) {
-          return;
-        }
-        
-        try {
-          const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
-          console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
-          
-          await axios.post(N8N_WEBHOOK_URL, msg);
-      
-        } catch (error) {
-          const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
-          console.error(`❌ Erro ao enviar webhook [${direction}] para o n8n:`, error.message);
-        }
-      });
-
-    return sock;
+    // WEBHOOK PARA O N8N
+    sockInstance.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      const msg = messages[0];
+      if (!msg.message || msg.message.protocolMessage || msg.key.remoteJid === 'status@broadcast') {
+        return;
+      }
+      if (!N8N_WEBHOOK_URL) return;
+      try {
+        const direction = msg.key.fromMe ? 'OUTGOING' : 'INCOMING';
+        console.log(`✅ Webhook [${direction}] enviado para n8n. De/Para: ${msg.key.remoteJid}`);
+        await axios.post(N8N_WEBHOOK_URL, msg);
+      } catch (error) {
+        console.error(`❌ Erro ao enviar webhook para o n8n:`, error.message);
+      }
+    });
   }
 
-  await connectToWhatsApp();
-  return sock;
+  // Inicia a primeira tentativa de conexão
+  connectToWhatsApp();
 }
 
 // =================================================================
-// 3. CRIAÇÃO DA API REST (EXPRESS)
+// 4. CRIAÇÃO DA API REST (EXPRESS)
 // =================================================================
-async function createApi() {
-  try {
-    const sock = await startBot();
-    const app = express();
-    app.use(express.json());
+function createApi() {
+  const app = express();
+  app.use(express.json());
 
-    const checkApiKey = (req, res, next) => {
-      const apiKey = req.headers['x-api-key'];
-      if (!API_KEY || apiKey === API_KEY) {
-        next();
-      } else {
-        res.status(401).json({ success: false, error: 'Chave de API inválida.' });
-      }
-    };
+  const checkApiKey = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!API_KEY || apiKey === API_KEY) {
+      next();
+    } else {
+      res.status(401).json({ success: false, error: 'Chave de API inválida.' });
+    }
+  };
 
-    app.use(checkApiKey);
+  app.use(checkApiKey);
 
-    app.get('/status', (req, res) => {
-      const isConnected = sock && sock.ws.readyState === 1;
-      res.json({ success: true, status: isConnected ? 'online' : 'offline' });
-    });
+  const formatJid = (number) => {
+    if (number.includes('@s.whatsapp.net')) return number;
+    return `${number}@s.whatsapp.net`;
+  };
 
-    const formatJid = (number) => {
-      if (number.includes('@s.whatsapp.net')) return number;
-      return `${number}@s.whatsapp.net`;
-    };
+  // MUDANÇA 3: Todas as rotas agora usam 'sockInstance' diretamente,
+  // garantindo que sempre peguem a conexão mais recente.
+  // Também adicionamos uma verificação para ver se o bot está pronto.
 
-    app.post('/send-text', async (req, res) => {
-      const { to, text } = req.body;
-      if (!to || !text) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "text" são obrigatórios.' });
-      try {
-        await sock.sendMessage(formatJid(to), { text });
-        res.json({ success: true, message: 'Mensagem de texto enviada.' });
-      } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-      }
-    });
+  app.get('/status', (req, res) => {
+    const isConnected = sockInstance && sockInstance.ws.readyState === 1;
+    res.json({ success: true, status: isConnected ? 'online' : 'offline' });
+  });
 
-// ROTA ALTERNATIVA PARA ENVIO BINÁRIO (MAIS AVANÇADA)
-// Note o 'express.raw' no meio. Ele substitui o 'express.json' para esta rota.
-    app.post('/send-audio-binary', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
-      // O 'to' não pode vir no corpo, pois o corpo é o áudio.
-      // Uma boa prática é enviá-lo como um query parameter na URL.
-      // Ex: /send-audio-binary?to=5511999998888
-      const { to } = req.query;
-    
-      if (!to) {
-        return res.status(400).json({ success: false, error: 'Parâmetro "to" na URL é obrigatório.' });
-      }
-    
-      try {
-        // O corpo da requisição (req.body) JÁ É o buffer do áudio!
-        const audioBuffer = req.body;
-        
-        await sock.sendMessage(formatJid(to), { audio: audioBuffer, ptt: true });
-        
-        res.json({ success: true, message: 'Áudio binário enviado.' });
-      } catch (e) {
-        console.error('Erro ao enviar áudio binário:', e);
-        res.status(500).json({ success: false, error: 'Falha ao processar ou enviar o áudio: ' + e.message });
-      }
-    });
+  app.post('/send-text', async (req, res) => {
+    const { to, text } = req.body;
+    if (!to || !text) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "text" são obrigatórios.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      await sockInstance.sendMessage(formatJid(to), { text });
+      res.json({ success: true, message: 'Mensagem de texto enviada.' });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
 
-    app.post('/get-profile-pic', async (req, res) => {
-      const { to } = req.body;
-      if (!to) return res.status(400).json({ success: false, error: 'Parâmetro "to" é obrigatório.' });
-    
-      try {
-        const jid = formatJid(to);
-        // O parâmetro 'image' pega a foto em alta resolução. 'preview' pega a miniatura.
-        const ppUrl = await sock.profilePictureUrl(jid, 'image');
-        res.json({ success: true, url: ppUrl });
-      } catch (e) {
-        // Ocorre um erro se o usuário não tiver foto ou se for privada
-        res.status(404).json({ success: false, error: 'Foto de perfil não encontrada ou é privada.' });
-      }
-    });
+  app.post('/send-audio-binary', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+    const { to } = req.query;
+    if (!to) return res.status(400).json({ success: false, error: 'Parâmetro "to" na URL é obrigatório.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      const audioBuffer = req.body;
+      await sockInstance.sendMessage(formatJid(to), { audio: audioBuffer, ptt: true });
+      res.json({ success: true, message: 'Áudio binário enviado.' });
+    } catch (e) {
+      res.status(500).json({ success: false, error: 'Falha ao processar ou enviar o áudio: ' + e.message });
+    }
+  });
 
+  app.post('/get-profile-pic', async (req, res) => {
+    const { to } = req.body;
+    if (!to) return res.status(400).json({ success: false, error: 'Parâmetro "to" é obrigatório.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      const jid = formatJid(to);
+      const ppUrl = await sockInstance.profilePictureUrl(jid, 'image');
+      res.json({ success: true, url: ppUrl });
+    } catch (e) {
+      res.status(404).json({ success: false, error: 'Foto de perfil não encontrada ou é privada.' });
+    }
+  });
 
-    // Rota para marcar o status de um usuário como visto
-    app.post('/view-status', async (req, res) => {
-      const { jid } = req.body; // Esperamos receber o JID completo do contato
-      
-      if (!jid) {
-        return res.status(400).json({ success: false, error: 'Parâmetro "jid" é obrigatório.' });
-      }
-      
-      if (!jid.endsWith('@s.whatsapp.net')) {
-         return res.status(400).json({ success: false, error: 'O "jid" deve ser o ID completo do usuário (ex: 5511999998888@s.whatsapp.net).' });
-      }
-    
-      try {
-        // Para marcar um status como visto, você precisa construir uma "key" especial.
-        // O participante é o JID do próprio bot, pois é ele quem "viu" o status.
-        const key = {
-          remoteJid: 'status@broadcast',
-          fromMe: false,
-          id: '', // O ID do status específico não é necessário para a notificação de visualização
-          participant: jid // O JID de quem postou o status
-        };
-    
-        // A função readMessages com a key correta notifica o WhatsApp que você viu o status.
-        await sock.readMessages([key]);
-        
-        res.json({ success: true, message: `Status de ${jid} marcado como visto.` });
-    
-      } catch (e) {
-        res.status(500).json({ success: false, error: 'Falha ao marcar status como visto: ' + e.message });
-      }
-    });
+  app.post('/view-status', async (req, res) => {
+    const { jid } = req.body;
+    if (!jid || !jid.endsWith('@s.whatsapp.net')) return res.status(400).json({ success: false, error: 'Parâmetro "jid" inválido.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      const key = { remoteJid: 'status@broadcast', fromMe: false, id: '', participant: jid };
+      await sockInstance.readMessages([key]);
+      res.json({ success: true, message: `Status de ${jid} marcado como visto.` });
+    } catch (e) {
+      res.status(500).json({ success: false, error: 'Falha ao marcar status como visto: ' + e.message });
+    }
+  });
 
-    // Rota para enviar status de presença (digitando, gravando, etc.)
-        app.post('/send-presence', async (req, res) => {
-          const { to, presence } = req.body; // 'to' é o JID do chat, 'presence' é o status
-    
-          if (!to || !presence) {
-            return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
-          }
-    
-          // Validação opcional para garantir que apenas status válidos sejam enviados
-          const validPresences = ['composing', 'recording', 'paused', 'available', 'unavailable'];
-          if (!validPresences.includes(presence)) {
-              return res.status(400).json({ success: false, error: `Status de presença inválido. Use um dos seguintes: ${validPresences.join(', ')}` });
-          }
-    
-          try {
-            await sock.sendPresenceUpdate(presence, formatJid(to));
-            res.json({ success: true, message: `Status '${presence}' enviado para o chat ${to}.` });
-          } catch (e) {
-            res.status(500).json({ success: false, error: e.message });
-          }
-        });
+  app.post('/send-presence', async (req, res) => {
+    const { to, presence } = req.body;
+    if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      await sockInstance.sendPresenceUpdate(presence, formatJid(to));
+      res.json({ success: true, message: `Status '${presence}' enviado para o chat ${to}.` });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
 
-    app.listen(API_PORT, () => {
-      console.log(`🚀 API do bot rodando na porta ${API_PORT}`);
-    });
-  } catch (error) {
-    console.error("❌ Falha crítica ao iniciar a aplicação:", error);
-    process.exit(1); // Encerra o processo se não conseguir iniciar
-  }
+  app.listen(API_PORT, () => {
+    console.log(`🚀 API do bot rodando na porta ${API_PORT}`);
+  });
 }
 
-// Inicia todo o sistema
-createApi();
+// =================================================================
+// 5. INICIA TODO O SISTEMA
+// =================================================================
+try {
+  startBot();   // Inicia o processo do bot em segundo plano
+  createApi();  // Inicia a API que usará a instância do bot
+} catch (error) {
+  console.error("❌ Falha crítica ao iniciar a aplicação:", error);
+  process.exit(1);
+}
