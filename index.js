@@ -173,22 +173,6 @@ function createApi() {
     }
   });
 
-  app.post('/send-presence', async (req, res) => {
-    const { to, presence } = req.body;
-    if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
-    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
-    try {
-      await sockInstance.sendPresenceUpdate(presence, formatJid(to));
-      res.json({ success: true, message: `Status '${presence}' enviado para o chat ${to}.` });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-
-  app.listen(API_PORT, () => {
-    console.log(`🚀 API do bot rodando na porta ${API_PORT}`);
-  });
-}
 
 // NOVO ENDPOINT PARA REAGIR A UMA MENSAGEM
 app.post('/send-reaction', async (req, res) => {
@@ -219,6 +203,24 @@ app.post('/send-reaction', async (req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
+
+  app.post('/send-presence', async (req, res) => {
+    const { to, presence } = req.body;
+    if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
+    if (!sockInstance) return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+    try {
+      await sockInstance.sendPresenceUpdate(presence, formatJid(to));
+      res.json({ success: true, message: `Status '${presence}' enviado para o chat ${to}.` });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.listen(API_PORT, () => {
+    console.log(`🚀 API do bot rodando na porta ${API_PORT}`);
+  });
+}
+
 
 // =================================================================
 // 5. INICIA TODO O SISTEMA
