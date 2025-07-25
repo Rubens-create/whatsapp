@@ -210,16 +210,27 @@ async function createApi() {
       }
     });
 
-    app.post('/send-presence', async (req, res) => {
-      const { to, presence } = req.body;
-      if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
-      try {
-        await sock.sendPresenceUpdate(presence, formatJid(to));
-        res.json({ success: true, message: `Status '${presence}' enviado.` });
-      } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-      }
-    });
+    // Rota para enviar status de presença (digitando, gravando, etc.)
+        app.post('/send-presence', async (req, res) => {
+          const { to, presence } = req.body; // 'to' é o JID do chat, 'presence' é o status
+    
+          if (!to || !presence) {
+            return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
+          }
+    
+          // Validação opcional para garantir que apenas status válidos sejam enviados
+          const validPresences = ['composing', 'recording', 'paused', 'available', 'unavailable'];
+          if (!validPresences.includes(presence)) {
+              return res.status(400).json({ success: false, error: `Status de presença inválido. Use um dos seguintes: ${validPresences.join(', ')}` });
+          }
+    
+          try {
+            await sock.sendPresenceUpdate(presence, formatJid(to));
+            res.json({ success: true, message: `Status '${presence}' enviado para o chat ${to}.` });
+          } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+          }
+        });
 
     app.listen(API_PORT, () => {
       console.log(`🚀 API do bot rodando na porta ${API_PORT}`);
