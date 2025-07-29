@@ -204,6 +204,36 @@ app.post('/send-reaction', async (req, res) => {
   }
 });
 
+// NOVO ENDPOINT PARA ENVIAR IMAGEM A PARTIR DE UMA URL
+app.post('/send-image-from-url', async (req, res) => {
+  // Para esta rota, esperamos o corpo em JSON
+  const { to, url, caption } = req.body;
+
+  if (!to || !url) {
+    return res.status(400).json({ success: false, error: 'Parâmetros "to" e "url" são obrigatórios.' });
+  }
+  if (!sockInstance) {
+    return res.status(503).json({ success: false, error: 'Bot não está pronto ou conectado.' });
+  }
+
+  try {
+    // Montamos o objeto da mensagem
+    const messageOptions = {
+      // A MUDANÇA ESTÁ AQUI: passamos um objeto com a URL
+      image: { url: url }, 
+      caption: caption || '', // Adiciona a legenda se ela existir, senão, string vazia
+    };
+
+    // Enviamos a imagem
+    await sockInstance.sendMessage(formatJid(to), messageOptions);
+
+    res.json({ success: true, message: 'Imagem da URL enviada.' });
+  } catch (e) {
+    console.error('Erro ao enviar imagem da URL:', e);
+    res.status(500).json({ success: false, error: 'Falha ao processar ou enviar a imagem da URL: ' + e.message });
+  }
+});
+
   app.post('/send-presence', async (req, res) => {
     const { to, presence } = req.body;
     if (!to || !presence) return res.status(400).json({ success: false, error: 'Parâmetros "to" e "presence" são obrigatórios.' });
